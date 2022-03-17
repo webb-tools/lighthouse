@@ -38,6 +38,12 @@ pub struct Inner {
     pub endpoints_cache: RwLock<Option<Arc<EndpointsCache>>>,
     pub config: RwLock<Config>,
     pub remote_head_block: RwLock<Option<Eth1Block>>,
+    /// When set to `true`, the service will emit error/critical logs when an eth1 node is not
+    /// synced.
+    ///
+    /// Generally, this will be set to `false` after the merge has completed to suppress excessive
+    /// logging whilst the execution engine and Lighthouse sync together.
+    pub enable_unsynced_logging: RwLock<bool>,
     pub spec: ChainSpec,
 }
 
@@ -100,6 +106,7 @@ impl SszEth1Cache {
             // Set the remote head_block zero when creating a new instance. We only care about
             // present and future eth1 nodes.
             remote_head_block: RwLock::new(None),
+            enable_unsynced_logging: RwLock::new(true),
             config: RwLock::new(config),
             spec,
         })

@@ -212,6 +212,8 @@ async fn endpoint_state(
     // Eth1 nodes return chain_id = 0 if the node is not synced
     // Handle the special case
     if chain_id == Eth1Id::Custom(0) {
+        // This log is not gated by the `enabled_unsynced_logging` variable since it will only occur
+        // on mainnet *before* the merge transition.
         warn!(
             log,
             "Remote eth1 node is not synced";
@@ -256,30 +258,37 @@ async fn get_remote_head_and_new_block_ranges(
     ),
     SingleEndpointError,
 > {
+    let enable_unsynced_logging = *service.inner.enable_unsynced_logging.read();
     let remote_head_block = download_eth1_block(endpoint, service.inner.clone(), None).await?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(u64::MAX);
-    if remote_head_block.timestamp + node_far_behind_seconds < now {
-        warn!(
-            service.log,
-            "Eth1 endpoint is not synced";
-            "endpoint" => %endpoint,
-            "last_seen_block_unix_timestamp" => remote_head_block.timestamp,
-            "action" => "trying fallback"
-        );
-        return Err(SingleEndpointError::EndpointError(EndpointError::FarBehind));
-    }
 
-    let handle_remote_not_synced = |e| {
-        if let SingleEndpointError::RemoteNotSynced { .. } = e {
+    if enable_unsynced_logging {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(u64::MAX);
+
+        if remote_head_block.timestamp + node_far_behind_seconds < now {
             warn!(
                 service.log,
                 "Eth1 endpoint is not synced";
                 "endpoint" => %endpoint,
-                "action" => "trying fallbacks"
+                "last_seen_block_unix_timestamp" => remote_head_block.timestamp,
+                "action" => "trying fallback"
             );
+            return Err(SingleEndpointError::EndpointError(EndpointError::FarBehind));
+        }
+    }
+
+    let handle_remote_not_synced = |e| {
+        if let SingleEndpointError::RemoteNotSynced { .. } = e {
+            if enable_unsynced_logging {
+                warn!(
+                    service.log,
+                    "Eth1 endpoint is not synced";
+                    "endpoint" => %endpoint,
+                    "action" => "trying fallbacks"
+                );
+            }
         }
         e
     };
@@ -472,6 +481,7 @@ impl Service {
                 )),
                 endpoints_cache: RwLock::new(None),
                 remote_head_block: RwLock::new(None),
+                enable_unsynced_logging: RwLock::new(true),
                 config: RwLock::new(config),
                 spec,
             }),
@@ -669,6 +679,15 @@ impl Service {
         }
     }
 
+    /// Disables high-serverity logging when unsynced beacon nodes are encountered.
+    ///
+    /// This is generally desirable after the merge transition has happened. The logging from this
+    /// service can be considered excessive when considered alongside the logs emitted by other
+    /// services whilst Lighthouse feeds execution payloads to a syncing EE.
+    pub fn disable_unsynced_logging(&self) {
+        *self.inner.enable_unsynced_logging.write() = false;
+    }
+
     /// Update the deposit and block cache, returning an error if either fail.
     ///
     /// ## Returns
@@ -680,6 +699,7 @@ impl Service {
     pub async fn update(
         &self,
     ) -> Result<(DepositCacheUpdateOutcome, BlockCacheUpdateOutcome), String> {
+        let enable_unsynced_logging = *self.inner.enable_unsynced_logging.read();
         let endpoints = self.get_endpoints();
 
         // Reset the state of any endpoints which have errored so their state can be redetermined.
@@ -694,16 +714,24 @@ impl Service {
                         .iter()
                         .all(|error| matches!(error, SingleEndpointError::EndpointError(_)))
                     {
-                        crit!(
-                            self.log,
-                            "Could not connect to a suitable eth1 node. Please ensure that you have \
-                             an eth1 http server running locally on http://localhost:8545 or specify \
-                             one or more (remote) endpoints using \
-                             `--eth1-endpoints <COMMA-SEPARATED-SERVER-ADDRESSES>`. \
-                             Also ensure that `eth` and `net` apis are enabled on the eth1 http \
-                             server";
-                             "warning" => WARNING_MSG
-                        );
+                        if enable_unsynced_logging {
+                            warn!(
+                                self.log,
+                                "No suitable execution engines";
+                                "msg" => "block production is temporarily impaired"
+                            );
+                        } else {
+                            crit!(
+                                self.log,
+                                "Could not connect to a suitable eth1 node. Please ensure that you have \
+                                 an eth1 http server running locally on http://localhost:8545 or specify \
+                                 one or more (remote) endpoints using \
+                                 `--eth1-endpoints <COMMA-SEPARATED-SERVER-ADDRESSES>`. \
+                                 Also ensure that `eth` and `net` apis are enabled on the eth1 http \
+                                 server";
+                                 "warning" => WARNING_MSG
+                            );
+                        }
                     }
                 }
             }

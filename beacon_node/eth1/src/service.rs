@@ -684,7 +684,7 @@ impl Service {
     /// This is generally desirable after the merge transition has happened. The logging from this
     /// service can be considered excessive when considered alongside the logs emitted by other
     /// services whilst Lighthouse feeds execution payloads to a syncing EE.
-    pub fn set_unsynced_logging(&self, enable_unsynced_logging: bool) {
+    pub fn enable_unsynced_logging(&self, enable_unsynced_logging: bool) {
         *self.inner.enable_unsynced_logging.write() = enable_unsynced_logging;
     }
 

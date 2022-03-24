@@ -387,6 +387,35 @@ fn eth1_logging<T: BeaconChainTypes>(
                     "Unable to determine eth1 sync status";
                 );
             }
+
+            // If the current slot is known, enable or disable loud warn/crit/error logs based on
+            // whether or not it's post-bellatrix and the beacon chain is syncing.
+            //
+            // If it's pre-bellatrix, we want to emit warning logs for unsynced eth1 nodes so the
+            // user can know their eth1 node is not synced.
+            //
+            // If it's post-bellatrix, it's most likely that the eth1 node can't finish syncing
+            // until the beacon node has finished syncing. Therefore, there's no value in altering
+            // the user that the eth1 node is syncing whilst the beacon node is syncing.
+            //
+            // There's a period between the bellatrix fork epoch and when the terminal difficulty is
+            // reached where we won't be logging unsynced errors during beacon sync, when there's
+            // some value in doing so. However, I argue that such logs have such a low value that
+            // it's not worth the complexity in trying to figure out if the merge transition has
+            // occurred. In this once-off edge case, Lighthouse will only *not* log loudly for an
+            // unsynced node whilst the beacon chain is syncing. Once the beacon chain has synced,
+            // the user will begin to be notified of an unsynced eth1 node.
+            //
+            // Before genesis occurs, the `enable_unsynced_logging` function will be left untouched.
+            if let Some(slot) = current_slot_opt {
+                let epoch = slot.epoch(T::EthSpec::slots_per_epoch());
+                let bellatrix_epoch_reached = beacon_chain
+                    .spec
+                    .bellatrix_fork_epoch
+                    .map_or(false, |bellatrix| epoch >= bellatrix);
+                let disable_unsynced_logging = beacon_chain_is_syncing && bellatrix_epoch_reached;
+                eth1_chain.enable_unsynced_logging(!disable_unsynced_logging);
+            }
         }
     } else {
         error!(

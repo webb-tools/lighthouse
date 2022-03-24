@@ -279,6 +279,12 @@ where
         )
     }
 
+    /// Enables or disables loud warn/error/crit logging when there is no synced eth1 node.
+    pub fn enable_unsynced_logging(&self, enable_unsynced_logging: bool) {
+        self.backend
+            .enable_unsynced_logging(enable_unsynced_logging);
+    }
+
     /// Instantiate `Eth1Chain` from a persisted `SszEth1`.
     ///
     /// The `Eth1Chain` will have the same caches as the persisted `SszEth1`.
@@ -339,6 +345,9 @@ pub trait Eth1ChainBackend<T: EthSpec>: Sized + Send + Sync {
     /// an idea of how up-to-date the remote eth1 node is.
     fn head_block(&self) -> Option<Eth1Block>;
 
+    /// Enables or disables loud warn/error/crit logging when there is no synced eth1 node.
+    fn enable_unsynced_logging(&self, enable_unsynced_logging: bool);
+
     /// Encode the `Eth1ChainBackend` instance to bytes.
     fn as_bytes(&self) -> Vec<u8>;
 
@@ -391,6 +400,10 @@ impl<T: EthSpec> Eth1ChainBackend<T> for DummyEth1ChainBackend<T> {
 
     fn head_block(&self) -> Option<Eth1Block> {
         None
+    }
+
+    fn enable_unsynced_logging(&self, _enable_unsynced_logging: bool) {
+        // The dummy backend doesn't emit logs, so there's nothing to do.
     }
 
     /// Return empty Vec<u8> for dummy backend.
@@ -559,6 +572,10 @@ impl<T: EthSpec> Eth1ChainBackend<T> for CachingEth1Backend<T> {
 
     fn head_block(&self) -> Option<Eth1Block> {
         self.core.head_block()
+    }
+
+    fn enable_unsynced_logging(&self, enable_unsynced_logging: bool) {
+        self.core.enable_unsynced_logging(enable_unsynced_logging);
     }
 
     /// Return encoded byte representation of the block and deposit caches.

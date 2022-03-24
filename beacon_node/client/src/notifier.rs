@@ -68,7 +68,11 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
                         "peers" => peer_count_pretty(network.connected_peers()),
                         "wait_time" => estimated_time_pretty(Some(next_slot.as_secs() as f64)),
                     );
-                    eth1_logging(&beacon_chain, &log);
+                    // Declare that the beacon chain is *not* syncing whilst waiting for genesis.
+                    // This ensures that we continue to log warnings when the eth1 cache is not
+                    // synced whilst waiting for genesis.
+                    let beacon_chain_is_syncing = false;
+                    eth1_logging(&beacon_chain, beacon_chain_is_syncing, &log);
                     sleep(slot_duration).await;
                 }
                 _ => break,
@@ -226,8 +230,10 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
                 );
             }
 
+            let beacon_chain_is_syncing = current_sync_state.is_syncing();
+
             // Log if we are syncing
-            if current_sync_state.is_syncing() {
+            if beacon_chain_is_syncing {
                 metrics::set_gauge(&metrics::IS_SYNCED, 0);
                 let distance = format!(
                     "{} slots ({})",
@@ -319,7 +325,7 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
                 );
             }
 
-            eth1_logging(&beacon_chain, &log);
+            eth1_logging(&beacon_chain, beacon_chain_is_syncing, &log);
         }
     };
 
@@ -329,7 +335,11 @@ pub fn spawn_notifier<T: BeaconChainTypes>(
     Ok(())
 }
 
-fn eth1_logging<T: BeaconChainTypes>(beacon_chain: &BeaconChain<T>, log: &Logger) {
+fn eth1_logging<T: BeaconChainTypes>(
+    beacon_chain: &BeaconChain<T>,
+    beacon_chain_is_syncing: bool,
+    log: &Logger,
+) {
     let current_slot_opt = beacon_chain.slot().ok();
 
     if let Ok(head_info) = beacon_chain.head_info() {
@@ -353,7 +363,7 @@ fn eth1_logging<T: BeaconChainTypes>(beacon_chain: &BeaconChain<T>, log: &Logger
                     "ready" => status.lighthouse_is_cached_and_ready
                 );
 
-                if !status.lighthouse_is_cached_and_ready {
+                if !status.lighthouse_is_cached_and_ready && !beacon_chain_is_syncing {
                     let voting_target_timestamp = status.voting_target_timestamp;
 
                     let distance = status

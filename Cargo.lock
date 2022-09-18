@@ -569,7 +569,7 @@ dependencies = [
  "eth2_hashing",
  "eth2_serde_utils",
  "eth2_ssz",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "hex",
  "milagro_bls",
  "rand 0.7.3",
@@ -713,7 +713,7 @@ dependencies = [
  "eth2_ssz",
  "eth2_ssz_derive",
  "eth2_ssz_types",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "quickcheck",
  "quickcheck_macros",
  "smallvec",
@@ -828,7 +828,7 @@ dependencies = [
  "dirs",
  "eth2_network_config",
  "eth2_ssz",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "hex",
  "serde",
  "serde_json",
@@ -1486,7 +1486,7 @@ dependencies = [
  "derivative",
  "eth2_ssz",
  "eth2_ssz_derive",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "fork_choice",
  "fs2",
  "hex",
@@ -1796,7 +1796,7 @@ dependencies = [
 name = "eth2_serde_utils"
 version = "0.1.1"
 dependencies = [
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "hex",
  "serde",
  "serde_derive",
@@ -1808,7 +1808,7 @@ name = "eth2_ssz"
 version = "0.4.1"
 dependencies = [
  "eth2_ssz_derive",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "itertools",
  "smallvec",
 ]
@@ -3883,7 +3883,7 @@ name = "merkle_proof"
 version = "0.2.0"
 dependencies = [
  "eth2_hashing",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "lazy_static",
  "quickcheck",
  "quickcheck_macros",
@@ -6397,7 +6397,7 @@ version = "0.2.0"
 dependencies = [
  "criterion",
  "eth2_hashing",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
 ]
 
 [[package]]
@@ -6958,7 +6958,7 @@ dependencies = [
  "eth2_hashing",
  "eth2_ssz",
  "eth2_ssz_derive",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "rand 0.8.5",
  "smallvec",
  "tree_hash_derive",
@@ -7098,7 +7098,7 @@ dependencies = [
  "eth2_ssz",
  "eth2_ssz_derive",
  "eth2_ssz_types",
- "ethereum-types 0.12.1",
+ "ethereum-types 0.13.1",
  "hex",
  "int_to_bytes",
  "itertools",

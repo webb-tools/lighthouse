@@ -7,16 +7,19 @@ use crate::http_metrics::metrics::{inc_counter_vec, ENDPOINT_ERRORS, ENDPOINT_RE
 use environment::RuntimeContext;
 use eth2::BeaconNodeHttpClient;
 use futures::future;
-use slog::{error, info, warn, Logger};
+use slog::{debug, error, info, warn, Logger};
 use slot_clock::SlotClock;
 use std::fmt;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::{sync::RwLock, time::sleep};
 use types::{ChainSpec, Config, EthSpec};
+
+/// Message emitted when the VC detects the BN is using a different spec.
+const UPDATE_REQUIRED_LOG_HINT: &str = "this VC or the remote BN may need updating";
 
 /// The number of seconds *prior* to slot start that we will try and update the state of fallback
 /// nodes.
@@ -26,6 +29,14 @@ use types::{ChainSpec, Config, EthSpec};
 /// an aggregate; this may result in a missed aggregation. If we set this time too late, we risk not
 /// having the correct nodes up and running prior to the start of the slot.
 const SLOT_LOOKAHEAD: Duration = Duration::from_secs(1);
+
+/// Indicates a measurement of latency between the VC and a BN.
+pub struct LatencyMeasurement {
+    /// An identifier for the beacon node (e.g. the URL).
+    pub beacon_node_id: String,
+    /// The round-trip latency, if the BN responded successfully.
+    pub latency: Option<Duration>,
+}
 
 /// Starts a service that will routinely try and update the status of the provided `beacon_nodes`.
 ///
@@ -105,11 +116,13 @@ impl<E> Error<E> {
 }
 
 /// The list of errors encountered whilst attempting to perform a query.
-pub struct AllErrored<E>(pub Vec<(String, Error<E>)>);
+pub struct Errors<E>(pub Vec<(String, Error<E>)>);
 
-impl<E: Debug> fmt::Display for AllErrored<E> {
+impl<E: Debug> fmt::Display for Errors<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "All endpoints failed")?;
+        if !self.0.is_empty() {
+            write!(f, "Some endpoints failed, num_failed: {}", self.0.len())?;
+        }
         for (i, (id, error)) in self.0.iter().enumerate() {
             let comma = if i + 1 < self.0.len() { "," } else { "" };
 
@@ -260,6 +273,7 @@ impl<E: EthSpec> CandidateBeaconNode<E> {
                 "Beacon node has mismatched Altair fork epoch";
                 "endpoint" => %self.beacon_node,
                 "endpoint_altair_fork_epoch" => ?beacon_node_spec.altair_fork_epoch,
+                "hint" => UPDATE_REQUIRED_LOG_HINT,
             );
         } else if beacon_node_spec.bellatrix_fork_epoch != spec.bellatrix_fork_epoch {
             warn!(
@@ -267,6 +281,15 @@ impl<E: EthSpec> CandidateBeaconNode<E> {
                 "Beacon node has mismatched Bellatrix fork epoch";
                 "endpoint" => %self.beacon_node,
                 "endpoint_bellatrix_fork_epoch" => ?beacon_node_spec.bellatrix_fork_epoch,
+                "hint" => UPDATE_REQUIRED_LOG_HINT,
+            );
+        } else if beacon_node_spec.capella_fork_epoch != spec.capella_fork_epoch {
+            warn!(
+                log,
+                "Beacon node has mismatched Capella fork epoch";
+                "endpoint" => %self.beacon_node,
+                "endpoint_capella_fork_epoch" => ?beacon_node_spec.capella_fork_epoch,
+                "hint" => UPDATE_REQUIRED_LOG_HINT,
             );
         }
 
@@ -294,15 +317,22 @@ impl<E: EthSpec> CandidateBeaconNode<E> {
 pub struct BeaconNodeFallback<T, E> {
     candidates: Vec<CandidateBeaconNode<E>>,
     slot_clock: Option<T>,
+    disable_run_on_all: bool,
     spec: ChainSpec,
     log: Logger,
 }
 
 impl<T: SlotClock, E: EthSpec> BeaconNodeFallback<T, E> {
-    pub fn new(candidates: Vec<CandidateBeaconNode<E>>, spec: ChainSpec, log: Logger) -> Self {
+    pub fn new(
+        candidates: Vec<CandidateBeaconNode<E>>,
+        disable_run_on_all: bool,
+        spec: ChainSpec,
+        log: Logger,
+    ) -> Self {
         Self {
             candidates,
             slot_clock: None,
+            disable_run_on_all,
             spec,
             log,
         }
@@ -385,6 +415,47 @@ impl<T: SlotClock, E: EthSpec> BeaconNodeFallback<T, E> {
         let _ = future::join_all(futures).await;
     }
 
+    /// Concurrently send a request to all candidates (regardless of
+    /// offline/online) status and attempt to collect a rough reading on the
+    /// latency between the VC and candidate.
+    pub async fn measure_latency(&self) -> Vec<LatencyMeasurement> {
+        let futures: Vec<_> = self
+            .candidates
+            .iter()
+            .map(|candidate| async {
+                let beacon_node_id = candidate.beacon_node.to_string();
+                // The `node/version` endpoint is used since I imagine it would
+                // require the least processing in the BN and therefore measure
+                // the connection moreso than the BNs processing speed.
+                //
+                // I imagine all clients have the version string availble as a
+                // pre-computed string.
+                let response_instant = candidate
+                    .beacon_node
+                    .get_node_version()
+                    .await
+                    .ok()
+                    .map(|_| Instant::now());
+                (beacon_node_id, response_instant)
+            })
+            .collect();
+
+        let request_instant = Instant::now();
+
+        // Send the request to all BNs at the same time. This might involve some
+        // queueing on the sending host, however I hope it will avoid bias
+        // caused by sending requests at different times.
+        future::join_all(futures)
+            .await
+            .into_iter()
+            .map(|(beacon_node_id, response_instant)| LatencyMeasurement {
+                beacon_node_id,
+                latency: response_instant
+                    .and_then(|response| response.checked_duration_since(request_instant)),
+            })
+            .collect()
+    }
+
     /// Run `func` against each candidate in `self`, returning immediately if a result is found.
     /// Otherwise, return all the errors encountered along the way.
     ///
@@ -396,14 +467,16 @@ impl<T: SlotClock, E: EthSpec> BeaconNodeFallback<T, E> {
         require_synced: RequireSynced,
         offline_on_failure: OfflineOnFailure,
         func: F,
-    ) -> Result<O, AllErrored<Err>>
+    ) -> Result<O, Errors<Err>>
     where
         F: Fn(&'a BeaconNodeHttpClient) -> R,
         R: Future<Output = Result<O, Err>>,
+        Err: Debug,
     {
         let mut errors = vec![];
         let mut to_retry = vec![];
         let mut retry_unsynced = vec![];
+        let log = &self.log.clone();
 
         // Run `func` using a `candidate`, returning the value or capturing errors.
         //
@@ -418,6 +491,12 @@ impl<T: SlotClock, E: EthSpec> BeaconNodeFallback<T, E> {
                 match func(&$candidate.beacon_node).await {
                     Ok(val) => return Ok(val),
                     Err(e) => {
+                        debug!(
+                            log,
+                            "Request to beacon node failed";
+                            "node" => $candidate.beacon_node.to_string(),
+                            "error" => ?e,
+                        );
                         // If we have an error on this function, make the client as not-ready.
                         //
                         // There exists a race condition where the candidate may have been marked
@@ -486,6 +565,146 @@ impl<T: SlotClock, E: EthSpec> BeaconNodeFallback<T, E> {
         }
 
         // There were no candidates already ready and we were unable to make any of them ready.
-        Err(AllErrored(errors))
+        Err(Errors(errors))
+    }
+
+    /// Run `func` against all candidates in `self`, collecting the result of `func` against each
+    /// candidate.
+    ///
+    /// First this function will try all nodes with a suitable status. If no candidates are suitable
+    /// it will try updating the status of all unsuitable nodes and re-running `func` again.
+    ///
+    /// Note: This function returns `Ok(())` if `func` returned successfully on all beacon nodes.
+    /// It returns a list of errors along with the beacon node id that failed for `func`.
+    /// Since this ignores the actual result of `func`, this function should only be used for beacon
+    /// node calls whose results we do not care about, only that they completed successfully.
+    pub async fn run_on_all<'a, F, O, Err, R>(
+        &'a self,
+        require_synced: RequireSynced,
+        offline_on_failure: OfflineOnFailure,
+        func: F,
+    ) -> Result<(), Errors<Err>>
+    where
+        F: Fn(&'a BeaconNodeHttpClient) -> R,
+        R: Future<Output = Result<O, Err>>,
+    {
+        let mut results = vec![];
+        let mut to_retry = vec![];
+        let mut retry_unsynced = vec![];
+
+        // Run `func` using a `candidate`, returning the value or capturing errors.
+        //
+        // We use a macro instead of a closure here since it is not trivial to move `func` into a
+        // closure.
+        macro_rules! try_func {
+            ($candidate: ident) => {{
+                inc_counter_vec(&ENDPOINT_REQUESTS, &[$candidate.beacon_node.as_ref()]);
+
+                // There exists a race condition where `func` may be called when the candidate is
+                // actually not ready. We deem this an acceptable inefficiency.
+                match func(&$candidate.beacon_node).await {
+                    Ok(val) => results.push(Ok(val)),
+                    Err(e) => {
+                        // If we have an error on this function, make the client as not-ready.
+                        //
+                        // There exists a race condition where the candidate may have been marked
+                        // as ready between the `func` call and now. We deem this an acceptable
+                        // inefficiency.
+                        if matches!(offline_on_failure, OfflineOnFailure::Yes) {
+                            $candidate.set_offline().await;
+                        }
+                        results.push(Err((
+                            $candidate.beacon_node.to_string(),
+                            Error::RequestFailed(e),
+                        )));
+                        inc_counter_vec(&ENDPOINT_ERRORS, &[$candidate.beacon_node.as_ref()]);
+                    }
+                }
+            }};
+        }
+
+        // First pass: try `func` on all synced and ready candidates.
+        //
+        // This ensures that we always choose a synced node if it is available.
+        for candidate in &self.candidates {
+            match candidate.status(RequireSynced::Yes).await {
+                Err(CandidateError::NotSynced) if require_synced == false => {
+                    // This client is unsynced we will try it after trying all synced clients
+                    retry_unsynced.push(candidate);
+                }
+                Err(_) => {
+                    // This client was not ready on the first pass, we might try it again later.
+                    to_retry.push(candidate);
+                }
+                Ok(_) => try_func!(candidate),
+            }
+        }
+
+        // Second pass: try `func` on ready unsynced candidates. This only runs if we permit
+        // unsynced candidates.
+        //
+        // Due to async race-conditions, it is possible that we will send a request to a candidate
+        // that has been set to an offline/unready status. This is acceptable.
+        if require_synced == false {
+            for candidate in retry_unsynced {
+                try_func!(candidate);
+            }
+        }
+
+        // Third pass: try again, attempting to make non-ready clients become ready.
+        for candidate in to_retry {
+            // If the candidate hasn't luckily transferred into the correct state in the meantime,
+            // force an update of the state.
+            let new_status = match candidate.status(require_synced).await {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    candidate
+                        .refresh_status(self.slot_clock.as_ref(), &self.spec, &self.log)
+                        .await
+                }
+            };
+
+            match new_status {
+                Ok(()) => try_func!(candidate),
+                Err(CandidateError::NotSynced) if require_synced == false => try_func!(candidate),
+                Err(e) => {
+                    results.push(Err((
+                        candidate.beacon_node.to_string(),
+                        Error::Unavailable(e),
+                    )));
+                }
+            }
+        }
+
+        let errors: Vec<_> = results.into_iter().filter_map(|res| res.err()).collect();
+
+        if !errors.is_empty() {
+            Err(Errors(errors))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Call `func` on first beacon node that returns success or on all beacon nodes
+    /// depending on the value of `disable_run_on_all`.
+    pub async fn run<'a, F, Err, R>(
+        &'a self,
+        require_synced: RequireSynced,
+        offline_on_failure: OfflineOnFailure,
+        func: F,
+    ) -> Result<(), Errors<Err>>
+    where
+        F: Fn(&'a BeaconNodeHttpClient) -> R,
+        R: Future<Output = Result<(), Err>>,
+        Err: Debug,
+    {
+        if self.disable_run_on_all {
+            self.first_success(require_synced, offline_on_failure, func)
+                .await?;
+            Ok(())
+        } else {
+            self.run_on_all(require_synced, offline_on_failure, func)
+                .await
+        }
     }
 }

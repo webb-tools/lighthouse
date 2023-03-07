@@ -5,7 +5,7 @@ authors = ["Michael Sproul <michael@sigmaprime.io>"]
 edition = "2021"
 
 [dependencies]
-ethereum-types = "0.13.1"
+ethereum-types = "0.14.1"
 eth2_ssz_types = { path = "../ssz_types" }
 eth2_hashing = { path = "../../crypto/eth2_hashing" }
 eth2_ssz_derive = { path = "../ssz_derive" }

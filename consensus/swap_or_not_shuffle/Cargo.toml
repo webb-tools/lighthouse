@@ -13,7 +13,7 @@ criterion = "0.3.3"
 
 [dependencies]
 eth2_hashing = { path = "../../crypto/eth2_hashing" }
-ethereum-types = "0.13.1"
+ethereum-types = "0.14.1"
 
 [features]
 arbitrary = ["ethereum-types/arbitrary"]

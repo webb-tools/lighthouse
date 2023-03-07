@@ -15,7 +15,7 @@ eth2_ssz = { path = "../ssz" }
 eth2_ssz_derive = { path = "../ssz_derive" }
 
 [dependencies]
-ethereum-types = "0.13.1"
+ethereum-types = "0.14.1"
 eth2_hashing = { path = "../../crypto/eth2_hashing" }
 smallvec = "1.6.1"
 

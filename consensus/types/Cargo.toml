@@ -15,7 +15,7 @@ compare_fields = { path = "../../common/compare_fields" }
 compare_fields_derive = { path = "../../common/compare_fields_derive" }
 eth2_interop_keypairs = { path = "../../common/eth2_interop_keypairs" }
 ethereum-types = { version = "0.14.1", features = ["arbitrary"] }
-eth2_hashing = "0.3.0"
+eth2_hashing = { path = "../../crypto/eth2_hashing" }
 hex = "0.4.2"
 int_to_bytes = { path = "../int_to_bytes" }
 log = "0.4.11"

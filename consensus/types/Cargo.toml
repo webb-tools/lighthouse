@@ -25,7 +25,7 @@ safe_arith = { path = "../safe_arith" }
 serde = {version = "1.0.116" , features = ["rc"] }
 serde_derive = "1.0.116"
 slog = "2.5.2"
-eth2_ssz = { path = "../ssz" }
+eth2_ssz = { path = "../ssz", features = ["arbitrary"] }
 eth2_ssz_derive = { path = "../ssz_derive" }
 eth2_ssz_types = { path = "../ssz_types", features = ["arbitrary"] }
 swap_or_not_shuffle = { path = "../swap_or_not_shuffle", features = ["arbitrary"] }
